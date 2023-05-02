@@ -38,9 +38,10 @@ class Featurization_parameters:
         self.THREE_D_DISTANCE_BINS = list(range(0, self.THREE_D_DISTANCE_MAX + 1, self.THREE_D_DISTANCE_STEP))
 
         # len(choices) + 1 to include room for uncommon values; + 2 at end for IsAromatic and mass
-        self.ATOM_FDIM = sum(len(choices) + 1 for choices in self.ATOM_FEATURES.values()) + 2
+        # self.ATOM_FDIM = sum(len(choices) + 1 for choices in self.ATOM_FEATURES.values()) + 2 + 1
+        self.ATOM_FDIM = len(self.ATOM_FEATURES.keys()) + 2 + 1
         self.EXTRA_ATOM_FDIM = 0
-        self.BOND_FDIM = 14
+        self.BOND_FDIM = 8 + 1
         self.EXTRA_BOND_FDIM = 0
         self.REACTION_MODE = None
         self.EXPLICIT_H = False
@@ -212,15 +213,26 @@ def atom_features(atom: Chem.rdchem.Atom, functional_groups: List[int] = None) -
     """
     if atom is None:
         features = [0] * PARAMS.ATOM_FDIM
+    elif atom == "super":
+        features = [1] + [0] * (PARAMS.ATOM_FDIM - 1)
     else:
-        features = onek_encoding_unk(atom.GetAtomicNum() - 1, PARAMS.ATOM_FEATURES['atomic_num']) + \
-            onek_encoding_unk(atom.GetTotalDegree(), PARAMS.ATOM_FEATURES['degree']) + \
-            onek_encoding_unk(atom.GetFormalCharge(), PARAMS.ATOM_FEATURES['formal_charge']) + \
-            onek_encoding_unk(int(atom.GetChiralTag()), PARAMS.ATOM_FEATURES['chiral_tag']) + \
-            onek_encoding_unk(int(atom.GetTotalNumHs()), PARAMS.ATOM_FEATURES['num_Hs']) + \
-            onek_encoding_unk(int(atom.GetHybridization()), PARAMS.ATOM_FEATURES['hybridization']) + \
-            [1 if atom.GetIsAromatic() else 0] + \
-            [atom.GetMass() * 0.01]  # scaled to about the same range as other features
+        features = [0] + [
+            atom.GetAtomicNum() - 1,
+            atom.GetTotalDegree(),
+            atom.GetFormalCharge(),
+            int(atom.GetChiralTag()),
+            int(atom.GetTotalNumHs()),
+            int(atom.GetHybridization())
+        ] + [1 if atom.GetIsAromatic() else 0] + [atom.GetMass() * 0.01]
+
+        # features = [0] + onek_encoding_unk(atom.GetAtomicNum() - 1, PARAMS.ATOM_FEATURES['atomic_num']) + \
+        #     onek_encoding_unk(atom.GetTotalDegree(), PARAMS.ATOM_FEATURES['degree']) + \
+        #     onek_encoding_unk(atom.GetFormalCharge(), PARAMS.ATOM_FEATURES['formal_charge']) + \
+        #     onek_encoding_unk(int(atom.GetChiralTag()), PARAMS.ATOM_FEATURES['chiral_tag']) + \
+        #     onek_encoding_unk(int(atom.GetTotalNumHs()), PARAMS.ATOM_FEATURES['num_Hs']) + \
+        #     onek_encoding_unk(int(atom.GetHybridization()), PARAMS.ATOM_FEATURES['hybridization']) + \
+        #     [1 if atom.GetIsAromatic() else 0] + \
+        #     [atom.GetMass() * 0.01]  # scaled to about the same range as other features
         if functional_groups is not None:
             features += functional_groups
     return features
@@ -249,19 +261,23 @@ def bond_features(bond: Chem.rdchem.Bond) -> List[Union[bool, int, float]]:
     :return: A list containing the bond features.
     """
     if bond is None:
-        fbond = [1] + [0] * (PARAMS.BOND_FDIM - 1)
+        fbond = [1, 0] + [0] * (PARAMS.BOND_FDIM - 2)
+    elif bond == "super":
+        fbond = [1, 1] + [0] * (PARAMS.BOND_FDIM - 2)
     else:
         bt = bond.GetBondType()
         fbond = [
             0,  # bond is not None
+            0,  # bond is not supernode
             bt == Chem.rdchem.BondType.SINGLE,
             bt == Chem.rdchem.BondType.DOUBLE,
             bt == Chem.rdchem.BondType.TRIPLE,
             bt == Chem.rdchem.BondType.AROMATIC,
             (bond.GetIsConjugated() if bt is not None else 0),
-            (bond.IsInRing() if bt is not None else 0)
+            (bond.IsInRing() if bt is not None else 0),
+            int(bond.GetStereo())
         ]
-        fbond += onek_encoding_unk(int(bond.GetStereo()), list(range(6)))
+        # fbond += onek_encoding_unk(int(bond.GetStereo()), list(range(6)))
     return fbond
 
 
@@ -338,6 +354,7 @@ class MolGraph:
         self.is_explicit_h = is_explicit_h(self.is_mol)
         self.is_adding_hs = is_adding_hs(self.is_mol)
         self.reaction_mode = reaction_mode()
+        add_super_node = True
         
         # Convert SMILES to RDKit molecule if necessary
         if type(mol) == str:
@@ -413,8 +430,8 @@ class MolGraph:
                                  f'the extra bond features')
 
         else: # Reaction mode
-            if atom_features_extra is not None:
-                raise NotImplementedError('Extra atom features are currently not supported for reactions')
+            # if atom_features_extra is not None:
+            #     raise NotImplementedError('Extra atom features are currently not supported for reactions')
             if bond_features_extra is not None:
                 raise NotImplementedError('Extra bond features are currently not supported for reactions')
 
@@ -425,12 +442,25 @@ class MolGraph:
             # Get atom features
             if self.reaction_mode in ['reac_diff','prod_diff', 'reac_prod']:
                 #Reactant: regular atom features for each atom in the reactants, as well as zero features for atoms that are only in the products (indices in pio)
-                f_atoms_reac = [atom_features(atom) for atom in mol_reac.GetAtoms()] + [atom_features_zeros(mol_prod.GetAtomWithIdx(index)) for index in pio]
+                if atom_features_extra is not None:
+                    f_atoms_reac = [atom_features(atom) + feat.tolist() for atom, feat in zip(mol_reac.GetAtoms(), atom_features_extra)] + [atom_features_zeros(mol_prod.GetAtomWithIdx(index)) for index in pio]
+                else:
+                    f_atoms_reac = [atom_features(atom) for atom in mol_reac.GetAtoms()] + [atom_features_zeros(mol_prod.GetAtomWithIdx(index)) for index in pio]
                 
+
                 #Product: regular atom features for each atom that is in both reactants and products (not in rio), other atom features zero,
                 #regular features for atoms that are only in the products (indices in pio)
-                f_atoms_prod = [atom_features(mol_prod.GetAtomWithIdx(ri2pi[atom.GetIdx()])) if atom.GetIdx() not in rio else
-                                atom_features_zeros(atom) for atom in mol_reac.GetAtoms()] + [atom_features(mol_prod.GetAtomWithIdx(index)) for index in pio]
+                if atom_features_extra is not None:
+                    f_atoms_prod = [atom_features(mol_prod.GetAtomWithIdx(ri2pi[atom.GetIdx()])) + feat.tolist() if atom.GetIdx() not in rio else
+                                    atom_features_zeros(atom) for atom, feat in zip(mol_reac.GetAtoms(), atom_features_extra)] + [atom_features(mol_prod.GetAtomWithIdx(index)) + atom_features_extra[index].tolist() for index in pio]
+                else:
+                    f_atoms_prod = [atom_features(mol_prod.GetAtomWithIdx(ri2pi[atom.GetIdx()])) if atom.GetIdx() not in rio else
+                                    atom_features_zeros(atom) for atom in mol_reac.GetAtoms()] + [atom_features(mol_prod.GetAtomWithIdx(index)) for index in pio]
+            
+                if add_super_node:
+                    f_atoms_reac.append(atom_features("super") + atom_features_extra[0].tolist())
+                    f_atoms_prod.append(atom_features("super") + atom_features_extra[0].tolist())
+
             else: #balance
                 #Reactant: regular atom features for each atom in the reactants, copy features from product side for atoms that are only in the products (indices in pio)
                 f_atoms_reac = [atom_features(atom) for atom in mol_reac.GetAtoms()] + [atom_features(mol_prod.GetAtomWithIdx(index)) for index in pio]
@@ -458,7 +488,12 @@ class MolGraph:
             # Get bond features
             for a1 in range(self.n_atoms):
                 for a2 in range(a1 + 1, self.n_atoms):
-                    if a1 >= n_atoms_reac and a2 >= n_atoms_reac: # Both atoms only in product
+
+                    # supernode bond
+                    if add_super_node and a2 == self.n_atoms - 1:
+                        bond_reac = "super"
+                        bond_prod = "super"
+                    elif a1 >= n_atoms_reac and a2 >= n_atoms_reac: # Both atoms only in product
                         bond_prod = mol_prod.GetBondBetweenAtoms(pio[a1 - n_atoms_reac], pio[a2 - n_atoms_reac])
                         if self.reaction_mode in ['reac_prod_balance', 'reac_diff_balance', 'prod_diff_balance']:
                             bond_reac = bond_prod
@@ -534,11 +569,13 @@ class BatchMolGraph:
         self.overwrite_default_atom_features = mol_graphs[0].overwrite_default_atom_features
         self.overwrite_default_bond_features = mol_graphs[0].overwrite_default_bond_features
         self.is_reaction = mol_graphs[0].is_reaction
-        self.atom_fdim = get_atom_fdim(overwrite_default_atom=self.overwrite_default_atom_features,
-                                       is_reaction=self.is_reaction)
-        self.bond_fdim = get_bond_fdim(overwrite_default_bond=self.overwrite_default_bond_features,
-                                      overwrite_default_atom=self.overwrite_default_atom_features,
-                                      is_reaction=self.is_reaction)
+        # self.atom_fdim = get_atom_fdim(overwrite_default_atom=self.overwrite_default_atom_features,
+        #                                is_reaction=self.is_reaction)
+        self.atom_fdim = 10
+        # self.bond_fdim = get_bond_fdim(overwrite_default_bond=self.overwrite_default_bond_features,
+        #                               overwrite_default_atom=self.overwrite_default_atom_features,
+        #                               is_reaction=self.is_reaction)
+        self.bond_fdim = 28
 
         # Start n_atoms and n_bonds at 1 b/c zero padding
         self.n_atoms = 1  # number of atoms (start at 1 b/c need index 0 as padding)
@@ -570,6 +607,9 @@ class BatchMolGraph:
 
         self.max_num_bonds = max(1, max(
             len(in_bonds) for in_bonds in a2b))  # max with 1 to fix a crash in rare case of all single-heavy-atom mols
+
+        # print([len(f) for f in f_atoms])
+        # print([len(f) for f in f_bonds])
 
         self.f_atoms = torch.tensor(f_atoms, dtype=torch.float)
         self.f_bonds = torch.tensor(f_bonds, dtype=torch.float)
