@@ -2,6 +2,7 @@ import json
 from logging import Logger
 import os
 from typing import Dict, List
+import wandb
 
 import numpy as np
 import warnings
@@ -26,6 +27,8 @@ from chemprop.utils import build_optimizer, build_lr_scheduler, load_checkpoint,
     save_checkpoint, save_smiles_splits, load_frzn_model, multitask_mean
 
 
+use_wandb_logger = True
+
 def run_training(args: TrainArgs,
                  data: MoleculeDataset,
                  logger: Logger = None) -> Dict[str, List[float]]:
@@ -43,6 +46,8 @@ def run_training(args: TrainArgs,
         debug, info = logger.debug, logger.info
     else:
         debug = info = print
+
+    run = wandb.init(project="vr", name="testje")
 
     # Set pytorch seed for random initial weights
     torch.manual_seed(args.pytorch_seed)
@@ -302,7 +307,8 @@ def run_training(args: TrainArgs,
                 n_iter=n_iter,
                 atom_bond_scaler=atom_bond_scaler,
                 logger=logger,
-                writer=writer
+                writer=writer,
+                use_wandb_logger=use_wandb_logger
             )
             if isinstance(scheduler, ExponentialLR):
                 scheduler.step()
@@ -328,6 +334,19 @@ def run_training(args: TrainArgs,
                     for task_name, val_score in zip(args.task_names, scores):
                         debug(f'Validation {task_name} {metric} = {val_score:.6f}')
                         writer.add_scalar(f'validation_{task_name}_{metric}', val_score, n_iter)
+
+            if use_wandb_logger:
+                metrics = {'step': n_iter}
+                for metric, scores in val_scores.items():
+                    # Average validation score\
+                    mean_val_score = multitask_mean(scores, metric=metric)
+                    metrics[f'validation_{metric}'] = mean_val_score
+
+                    if args.show_individual_scores:
+                        # Individual validation scores
+                        for task_name, val_score in zip(args.task_names, scores):
+                            metrics[f'validation_{task_name}_{metric}'] = val_score
+                wandb.log(metrics)
 
             # Save model checkpoint if improved validation score
             mean_val_score = multitask_mean(val_scores[args.metric], metric=args.metric)
@@ -379,6 +398,7 @@ def run_training(args: TrainArgs,
                     for task_name, test_score in zip(args.task_names, scores):
                         info(f'Model {model_idx} test {task_name} {metric} = {test_score:.6f}')
                         writer.add_scalar(f'test_{task_name}_{metric}', test_score, n_iter)
+
         writer.close()
 
     # Evaluate ensemble on test set

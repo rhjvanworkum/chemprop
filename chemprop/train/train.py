@@ -1,5 +1,6 @@
 import logging
 from typing import Callable
+import wandb
 
 import numpy as np
 from tensorboardX import SummaryWriter
@@ -26,6 +27,7 @@ def train(
     atom_bond_scaler: AtomBondScaler = None,
     logger: logging.Logger = None,
     writer: SummaryWriter = None,
+    use_wandb_logger = None
 ) -> int:
     """
     Trains a model for an epoch.
@@ -247,5 +249,15 @@ def train(
                 writer.add_scalar("gradient_norm", gnorm, n_iter)
                 for i, lr in enumerate(lrs):
                     writer.add_scalar(f"learning_rate_{i}", lr, n_iter)
+            if use_wandb_logger:
+                metrics = {
+                    'step': n_iter,
+                    'train_loss': loss_avg,
+                    'param_norm': pnorm,
+                    'gradient_norm': gnorm
+                }
+                for i, lr in enumerate(lrs):
+                    metrics[f"learning_rate_{i}"] = lr
+                wandb.log(metrics)
 
     return n_iter
