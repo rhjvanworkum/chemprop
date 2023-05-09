@@ -36,6 +36,9 @@ def get_metric_func(metric: str) -> Callable[[Union[List[int], List[float]], Lis
     if metric == 'prc-auc':
         return prc_auc
 
+    if metric == "pearson":
+        return pearson
+
     if metric == 'rmse':
         return rmse
 
@@ -340,3 +343,9 @@ def wasserstein_metric(model_spectra: List[List[float]], target_spectra: List[Li
     loss = np.mean(loss)
 
     return loss
+
+
+def pearson(targets: List[float], preds: List[float]) -> float:
+    from scipy.stats import pearsonr
+    corr, _ = pearsonr(targets, preds)
+    return corr

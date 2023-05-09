@@ -1,14 +1,16 @@
 import json
 from logging import Logger
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional, Callable
 
+import wandb
 import numpy as np
 import warnings
 warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning) 
 import pandas as pd
 from tensorboardX import SummaryWriter
 import torch
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import trange
 from torch.optim.lr_scheduler import ExponentialLR
 
@@ -26,9 +28,12 @@ from chemprop.utils import build_optimizer, build_lr_scheduler, load_checkpoint,
     save_checkpoint, save_smiles_splits, load_frzn_model, multitask_mean
 
 
-def run_training(args: TrainArgs,
-                 data: MoleculeDataset,
-                 logger: Logger = None) -> Dict[str, List[float]]:
+def run_training(
+    args: TrainArgs,
+    data: MoleculeDataset,
+    logger: Logger = None,
+    scheduler_fn: Optional[Callable] = None
+) -> Dict[str, List[float]]:
     """
     Loads data, trains a Chemprop model, and returns test scores for the model checkpoint with the highest validation score.
 
@@ -285,14 +290,19 @@ def run_training(args: TrainArgs,
         optimizer = build_optimizer(model, args)
 
         # Learning rate schedulers
-        scheduler = build_lr_scheduler(optimizer, args)
+        if scheduler_fn is None:
+            scheduler = build_lr_scheduler(optimizer, args)
+        else:
+            scheduler = scheduler_fn(optimizer, args)
 
         # Run training
         best_score = float('inf') if args.minimize_score else -float('inf')
         best_epoch, n_iter = 0, 0
         for epoch in trange(args.epochs):
             debug(f'Epoch {epoch}')
+
             n_iter = train(
+                epoch=epoch,
                 model=model,
                 data_loader=train_data_loader,
                 loss_func=loss_func,
@@ -302,10 +312,13 @@ def run_training(args: TrainArgs,
                 n_iter=n_iter,
                 atom_bond_scaler=atom_bond_scaler,
                 logger=logger,
-                writer=writer
+                writer=writer,
+                use_wandb_logger=args.use_wandb_logger
             )
+
             if isinstance(scheduler, ExponentialLR):
                 scheduler.step()
+            
             val_scores = evaluate(
                 model=model,
                 data_loader=val_data_loader,
@@ -316,6 +329,14 @@ def run_training(args: TrainArgs,
                 atom_bond_scaler=atom_bond_scaler,
                 logger=logger
             )
+
+            if args.use_wandb_logger:
+                scores = {f'val_{k}': v[0] for k, v in val_scores.items()}
+                scores['epoch'] = epoch
+                wandb.log(scores)
+
+            if isinstance(scheduler, ReduceLROnPlateau):
+                scheduler.step(val_scores[args.metrics[0]][0])
 
             for metric, scores in val_scores.items():
                 # Average validation score\
@@ -350,6 +371,7 @@ def run_training(args: TrainArgs,
                 scaler=scaler,
                 atom_bond_scaler=atom_bond_scaler
             )
+            
             test_scores = evaluate_predictions(
                 preds=test_preds,
                 targets=test_targets,
@@ -361,6 +383,11 @@ def run_training(args: TrainArgs,
                 lt_targets=test_data.lt_targets(),
                 logger=logger
             )
+
+            if args.use_wandb_logger:
+                scores = {f'test_{k}': v[0] for k, v in test_scores.items()}
+                scores['epoch'] = 0
+                wandb.log(scores)
 
             if len(test_preds) != 0:
                 if args.is_atom_bond_targets:

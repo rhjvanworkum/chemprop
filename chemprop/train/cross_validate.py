@@ -4,7 +4,7 @@ import json
 from logging import Logger
 import os
 import sys
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple, Optional, Any
 import subprocess
 
 import numpy as np
@@ -19,9 +19,11 @@ from chemprop.features import set_extra_atom_fdim, set_extra_bond_fdim, set_expl
 
 
 @timeit(logger_name=TRAIN_LOGGER_NAME)
-def cross_validate(args: TrainArgs,
-                   train_func: Callable[[TrainArgs, MoleculeDataset, Logger], Dict[str, List[float]]]
-                   ) -> Tuple[float, float]:
+def cross_validate(
+    args: TrainArgs,
+    train_func: Callable[[TrainArgs, MoleculeDataset, Logger], Dict[str, List[float]]],
+    scheduler_fn: Optional[Callable] = None                   
+) -> Tuple[float, float]:
     """
     Runs k-fold cross-validation.
 
@@ -116,7 +118,7 @@ def cross_validate(args: TrainArgs,
                 model_scores = json.load(f)
         # Otherwise, train the models
         else:
-            model_scores = train_func(args, data, logger)
+            model_scores = train_func(args, data, logger, scheduler_fn)
 
         for metric, scores in model_scores.items():
             all_scores[metric].append(scores)

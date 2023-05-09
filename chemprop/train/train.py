@@ -1,13 +1,15 @@
 import logging
 from typing import Callable
+from chemprop.train.evaluate import evaluate_predictions
 
 import numpy as np
 from tensorboardX import SummaryWriter
 import torch
 import torch.nn as nn
 from torch.optim import Optimizer
-from torch.optim.lr_scheduler import _LRScheduler
+from torch.optim.lr_scheduler import _LRScheduler, ReduceLROnPlateau
 from tqdm import tqdm
+import wandb
 
 from chemprop.args import TrainArgs
 from chemprop.data import MoleculeDataLoader, MoleculeDataset, AtomBondScaler
@@ -16,6 +18,7 @@ from chemprop.nn_utils import compute_gnorm, compute_pnorm, NoamLR
 
 
 def train(
+    epoch: int,
     model: MoleculeModel,
     data_loader: MoleculeDataLoader,
     loss_func: Callable,
@@ -26,6 +29,7 @@ def train(
     atom_bond_scaler: AtomBondScaler = None,
     logger: logging.Logger = None,
     writer: SummaryWriter = None,
+    use_wandb_logger: bool = False
 ) -> int:
     """
     Trains a model for an epoch.
@@ -40,6 +44,7 @@ def train(
     :param atom_bond_scaler: A :class:`~chemprop.data.scaler.AtomBondScaler` fitted on the atomic/bond targets.
     :param logger: A logger for recording output.
     :param writer: A tensorboardX SummaryWriter.
+    :param use_wandb_logger: Whether to log metrics using wandb
     :return: The total number of iterations (training examples) trained on so far.
     """
     debug = logger.debug if logger is not None else print
@@ -49,6 +54,8 @@ def train(
         loss_sum, iter_count = [0]*(len(args.atom_targets) + len(args.bond_targets)), 0
     else:
         loss_sum = iter_count = 0
+
+    results = {}
 
     for batch in tqdm(data_loader, total=len(data_loader), leave=False):
         # Prepare batch
@@ -226,9 +233,34 @@ def train(
 
         n_iter += len(batch)
 
+        # log metrics
+        batch_results = evaluate_predictions(
+            preds=preds.detach(),
+            targets=targets.detach(),
+            metrics=args.metrics,
+            num_tasks=args.num_tasks,
+            dataset_type=args.dataset_type,
+            is_atom_bond_targets=model.is_atom_bond_targets,
+            logger=logger,
+            gt_targets=None,
+            lt_targets=None,
+        )
+
+        for k,v in batch_results.items():
+            if k in results.keys():
+                results[k].append(v[0])
+            else:
+                results[k] = [v[0]]
+
         # Log and/or add to tensorboard
         if (n_iter // args.batch_size) % args.log_frequency == 0:
-            lrs = scheduler.get_lr()
+            if isinstance(scheduler, ReduceLROnPlateau):
+                try:
+                    lrs = scheduler._last_lr
+                except:
+                    lrs = [0]
+            else:
+                lrs = scheduler.get_lr()
             pnorm = compute_pnorm(model)
             gnorm = compute_gnorm(model)
             if model.is_atom_bond_targets:
@@ -247,5 +279,24 @@ def train(
                 writer.add_scalar("gradient_norm", gnorm, n_iter)
                 for i, lr in enumerate(lrs):
                     writer.add_scalar(f"learning_rate_{i}", lr, n_iter)
+
+            if use_wandb_logger:
+                metrics = {
+                    'step': n_iter,
+                    'train_loss': loss_avg,
+                    'param_norm': pnorm,
+                    'gradient_norm': gnorm
+                }
+                for i, lr in enumerate(lrs):
+                    metrics[f"learning_rate_{i}"] = lr
+                wandb.log(metrics)
+
+
+
+    # log train metrics
+    if use_wandb_logger:
+        metrics = {f'train_{k}': np.mean(np.array(v)) for k, v in results.items()}
+        metrics['epoch'] = epoch
+        wandb.log(metrics)
 
     return n_iter
