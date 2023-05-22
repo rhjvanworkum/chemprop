@@ -235,8 +235,8 @@ def train(
 
         # log metrics
         batch_results = evaluate_predictions(
-            preds=preds.detach(),
-            targets=targets.detach(),
+            preds=preds.detach().cpu(),
+            targets=targets.detach().cpu(),
             metrics=args.metrics,
             num_tasks=args.num_tasks,
             dataset_type=args.dataset_type,
