@@ -413,8 +413,6 @@ class MolGraph:
                                  f'the extra bond features')
 
         else: # Reaction mode
-            if atom_features_extra is not None:
-                raise NotImplementedError('Extra atom features are currently not supported for reactions')
             if bond_features_extra is not None:
                 raise NotImplementedError('Extra bond features are currently not supported for reactions')
 
@@ -425,12 +423,19 @@ class MolGraph:
             # Get atom features
             if self.reaction_mode in ['reac_diff','prod_diff', 'reac_prod']:
                 #Reactant: regular atom features for each atom in the reactants, as well as zero features for atoms that are only in the products (indices in pio)
-                f_atoms_reac = [atom_features(atom) for atom in mol_reac.GetAtoms()] + [atom_features_zeros(mol_prod.GetAtomWithIdx(index)) for index in pio]
+                if atom_features_extra is not None:
+                    f_atoms_reac = [atom_features(atom) + feat.tolist() for atom, feat in zip(mol_reac.GetAtoms(), atom_features_extra)] + [atom_features_zeros(mol_prod.GetAtomWithIdx(index)) for index in pio]
+                else:
+                    f_atoms_reac = [atom_features(atom) for atom in mol_reac.GetAtoms()] + [atom_features_zeros(mol_prod.GetAtomWithIdx(index)) for index in pio]
                 
                 #Product: regular atom features for each atom that is in both reactants and products (not in rio), other atom features zero,
                 #regular features for atoms that are only in the products (indices in pio)
-                f_atoms_prod = [atom_features(mol_prod.GetAtomWithIdx(ri2pi[atom.GetIdx()])) if atom.GetIdx() not in rio else
-                                atom_features_zeros(atom) for atom in mol_reac.GetAtoms()] + [atom_features(mol_prod.GetAtomWithIdx(index)) for index in pio]
+                if atom_features_extra is not None:
+                    f_atoms_prod = [atom_features(mol_prod.GetAtomWithIdx(ri2pi[atom.GetIdx()])) + feat.tolist() if atom.GetIdx() not in rio else
+                                    atom_features_zeros(atom) for atom, feat in zip(mol_reac.GetAtoms(), atom_features_extra)] + [atom_features(mol_prod.GetAtomWithIdx(index)) + atom_features_extra[index].tolist() for index in pio]
+                else:
+                    f_atoms_prod = [atom_features(mol_prod.GetAtomWithIdx(ri2pi[atom.GetIdx()])) if atom.GetIdx() not in rio else
+                                    atom_features_zeros(atom) for atom in mol_reac.GetAtoms()] + [atom_features(mol_prod.GetAtomWithIdx(index)) for index in pio]
             else: #balance
                 #Reactant: regular atom features for each atom in the reactants, copy features from product side for atoms that are only in the products (indices in pio)
                 f_atoms_reac = [atom_features(atom) for atom in mol_reac.GetAtoms()] + [atom_features(mol_prod.GetAtomWithIdx(index)) for index in pio]
