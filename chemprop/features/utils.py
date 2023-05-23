@@ -75,7 +75,7 @@ def load_valid_atom_or_bond_features(path: str, smiles: List[str]) -> List[np.nd
 
     if extension == '.npz':
         container = np.load(path)
-        features = [container[key] for key in container]
+        features = [[[i] for i in container[key]] for key in container]
 
     elif extension in ['.pkl', '.pckl', '.pickle']:
         features_df = pd.read_pickle(path)
