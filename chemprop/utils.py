@@ -7,7 +7,7 @@ import os
 import pickle
 import re
 from time import time
-from typing import Any, Callable, List, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 import collections
 
 import torch
@@ -93,7 +93,10 @@ def save_checkpoint(
 
 
 def load_checkpoint(
-    path: str, device: torch.device = None, logger: logging.Logger = None
+    path: str, 
+    device: torch.device = None, 
+    logger: logging.Logger = None, 
+    exclude_parameters: Optional[List[str]] = None
 ) -> MoleculeModel:
     """
     Loads a model checkpoint.
@@ -144,8 +147,13 @@ def load_checkpoint(
                 f"model parameter of shape {model_state_dict[param_name].shape}."
             )
         else:
-            debug(f'Loading pretrained parameter "{loaded_param_name}".')
-            pretrained_state_dict[param_name] = loaded_state_dict[loaded_param_name]
+            if exclude_parameters is not None:
+                if param_name.split('.')[0] not in exclude_parameters:
+                    debug(f'Loading pretrained parameter "{loaded_param_name}". {loaded_state_dict[loaded_param_name].shape}')
+                    pretrained_state_dict[param_name] = loaded_state_dict[loaded_param_name]
+            else:
+                debug(f'Loading pretrained parameter "{loaded_param_name}". {loaded_state_dict[loaded_param_name].shape}')
+                pretrained_state_dict[param_name] = loaded_state_dict[loaded_param_name]
 
     # Load pretrained weights
     model_state_dict.update(pretrained_state_dict)

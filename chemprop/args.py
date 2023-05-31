@@ -246,6 +246,9 @@ class CommonArgs(Tap):
 class TrainArgs(CommonArgs):
     """:class:`TrainArgs` includes :class:`CommonArgs` along with additional arguments used for training a Chemprop model."""
 
+    # newly added
+    exclude_parameters: List[str] = None
+
     # General arguments
     data_path: str
     """Path to data CSV file."""
